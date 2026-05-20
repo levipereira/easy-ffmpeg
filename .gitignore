@@ -6,3 +6,8 @@
 /bin/
 /.shards/
 *.dwarf
+
+# Reference-only material (not part of the project)
+/gear360pano/
+/dualfisheye_stitching17.pdf
+/dualfisheye_stitching17.pdf:Zone.Identifier

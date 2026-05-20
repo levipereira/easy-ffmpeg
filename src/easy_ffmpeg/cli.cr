@@ -26,7 +26,11 @@ module EasyFfmpeg
       gpu_quality = GpuSupport::Quality::Balanced
       vr360_mode : Vr360::Mode? = nil
       vr360_input = Vr360::Input::Dfisheye
-      vr360_fov = Vr360::DEFAULT_FOV
+      vr360_profile = Vr360::Profile::Generic
+      vr360_fov : Int32? = nil
+      vr360_yaw = 0.0
+      vr360_pitch = 0.0
+      vr360_roll = 0.0
       input_path : String? = nil
       target_ext : String? = nil
 
@@ -110,13 +114,30 @@ module EasyFfmpeg
           end
           vr360_input = input
         end
-        parser.on("--vr360-fov DEG", "Fisheye FOV in degrees for --vr360 (default: 195)") do |v|
+        parser.on("--vr360-profile NAME", "Camera profile: generic (default) | gear360 (FOV 193)") do |v|
+          prof = Vr360.parse_profile?(v)
+          unless prof
+            Display.show_error("invalid --vr360-profile value: '#{v}'. Use: generic | gear360")
+            exit 1
+          end
+          vr360_profile = prof
+        end
+        parser.on("--vr360-fov DEG", "Fisheye FOV in degrees (overrides profile default)") do |v|
           val = v.to_i?
           unless val && val > 0 && val <= 360
             Display.show_error("--vr360-fov must be an integer between 1 and 360")
             exit 1
           end
           vr360_fov = val
+        end
+        parser.on("--vr360-yaw DEG", "Per-camera output yaw correction (degrees, default: 0)") do |v|
+          vr360_yaw = parse_angle_or_exit(v, "--vr360-yaw")
+        end
+        parser.on("--vr360-pitch DEG", "Per-camera output pitch correction (degrees, default: 0)") do |v|
+          vr360_pitch = parse_angle_or_exit(v, "--vr360-pitch")
+        end
+        parser.on("--vr360-roll DEG", "Per-camera output roll correction (degrees, default: 0)") do |v|
+          vr360_roll = parse_angle_or_exit(v, "--vr360-roll")
         end
         parser.on("-o PATH", "--output=PATH", "Custom output file path") { |p| custom_output = p }
         parser.on("--dry-run", "Print ffmpeg command without executing") { dry_run = true }
@@ -289,7 +310,9 @@ module EasyFfmpeg
         start_time: start_time, end_time: end_time, duration: duration,
         scale: scale, aspect: aspect, crop: crop, overwrite_output: force,
         use_gpu: use_gpu, gpu_quality: gpu_quality,
-        vr360_mode: vr360_mode, vr360_input: vr360_input, vr360_fov: vr360_fov)
+        vr360_mode: vr360_mode, vr360_input: vr360_input,
+        vr360_profile: vr360_profile, vr360_fov: vr360_fov,
+        vr360_yaw: vr360_yaw, vr360_pitch: vr360_pitch, vr360_roll: vr360_roll)
 
       # Apply --no-subs: override subtitle plans to Drop
       if no_subs
@@ -308,6 +331,14 @@ module EasyFfmpeg
       end
 
       Display.show_plan(plan)
+
+      # v360 is a single-pass projection; it can't match a calibrated panorama
+      # stitcher's seam quality on Gear 360 footage. Point users at the right
+      # tool when they've signaled they care about Gear 360 specifically.
+      if plan.vr360_mode.try(&.full?) && plan.vr360_profile.gear360?
+        Display.show_warning("for production-quality Gear 360 stitching, pre-process with gear360pano")
+        Display.show_warning("  (https://github.com/levipereira/gear360pano), then re-run with --vr360 encode")
+      end
 
       if dry_run
         converter = Converter.new(plan)
@@ -409,6 +440,15 @@ module EasyFfmpeg
       unless result
         Display.show_error("invalid time for #{flag}: '#{value}'")
         STDERR.puts "  Accepted formats: 90, 1:31, 1:31.500, 1:02:30, 1:02:30.500"
+        exit 1
+      end
+      result
+    end
+
+    private def self.parse_angle_or_exit(value : String, flag : String) : Float64
+      result = value.to_f?
+      unless result && result >= -360.0 && result <= 360.0
+        Display.show_error("invalid angle for #{flag}: '#{value}' (expected -360 to 360 degrees)")
         exit 1
       end
       result

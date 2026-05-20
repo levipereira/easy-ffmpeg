@@ -44,7 +44,11 @@ module EasyFfmpeg
     getter gpu_quality : GpuSupport::Quality
     getter vr360_mode : Vr360::Mode?
     getter vr360_input : Vr360::Input
-    getter vr360_fov : Int32
+    getter vr360_profile : Vr360::Profile
+    getter vr360_fov : Int32?
+    getter vr360_yaw : Float64
+    getter vr360_pitch : Float64
+    getter vr360_roll : Float64
     getter? pure_gpu_pipeline : Bool
 
     def initialize(@input, @output_path, @target_format, @preset,
@@ -53,7 +57,8 @@ module EasyFfmpeg
                    @overwrite_output = false, @use_gpu = false,
                    @gpu_quality = GpuSupport::Quality::Balanced,
                    @vr360_mode = nil, @vr360_input = Vr360::Input::Dfisheye,
-                   @vr360_fov = Vr360::DEFAULT_FOV)
+                   @vr360_profile = Vr360::Profile::Generic, @vr360_fov = nil,
+                   @vr360_yaw = 0.0, @vr360_pitch = 0.0, @vr360_roll = 0.0)
       @stream_plans = [] of StreamPlan
       @global_args = [] of String
       @video_filters = [] of String
@@ -287,9 +292,10 @@ module EasyFfmpeg
 
     # v360 is CPU-only; its presence is what disables the pure GPU pipeline.
     private def append_vr360_filters(stream : StreamInfo, mode : Vr360::Mode)
-      unless mode.encode?
-        @video_filters << Vr360.dewarp_filter(vr360_input, vr360_fov)
-      end
+      return if mode.encode?
+      fov = vr360_fov || Vr360.profile_fov(vr360_profile)
+      @video_filters << Vr360.dewarp_filter(vr360_input, fov,
+        yaw: vr360_yaw, pitch: vr360_pitch, roll: vr360_roll)
     end
 
     private def append_vr360_scale(stream : StreamInfo)

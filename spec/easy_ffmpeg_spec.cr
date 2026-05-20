@@ -948,17 +948,44 @@ describe EasyFfmpeg do
 
     it "builds the dewarp filter for dual-lens (dfisheye) with default FOV 195" do
       EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Dfisheye)
-        .should eq("v360=input=dfisheye:output=equirect:ih_fov=195:iv_fov=195")
+        .should eq("v360=input=dfisheye:output=equirect:ih_fov=195:iv_fov=195:interp=lanczos")
     end
 
     it "builds the dewarp filter for single-lens (fisheye)" do
       EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Fisheye)
-        .should eq("v360=input=fisheye:output=equirect:ih_fov=195:iv_fov=195")
+        .should eq("v360=input=fisheye:output=equirect:ih_fov=195:iv_fov=195:interp=lanczos")
     end
 
     it "honors a custom FOV" do
       EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Dfisheye, 210)
-        .should eq("v360=input=dfisheye:output=equirect:ih_fov=210:iv_fov=210")
+        .should eq("v360=input=dfisheye:output=equirect:ih_fov=210:iv_fov=210:interp=lanczos")
+    end
+
+    it "appends yaw/pitch/roll only when non-zero" do
+      base = EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Dfisheye)
+      base.should_not contain("yaw")
+      base.should_not contain("pitch")
+      base.should_not contain("roll")
+
+      tweaked = EasyFfmpeg::Vr360.dewarp_filter(
+        EasyFfmpeg::Vr360::Input::Dfisheye, 195,
+        yaw: 2.0, pitch: -1.5, roll: 0.0,
+      )
+      tweaked.should contain("yaw=2")
+      tweaked.should contain("pitch=-1.5")
+      tweaked.should_not contain("roll=")
+    end
+
+    it "parses profile names" do
+      EasyFfmpeg::Vr360.parse_profile?("generic").should eq(EasyFfmpeg::Vr360::Profile::Generic)
+      EasyFfmpeg::Vr360.parse_profile?("gear360").should eq(EasyFfmpeg::Vr360::Profile::Gear360)
+      EasyFfmpeg::Vr360.parse_profile?("samsung").should eq(EasyFfmpeg::Vr360::Profile::Gear360)
+      EasyFfmpeg::Vr360.parse_profile?("bogus").should be_nil
+    end
+
+    it "profile_fov returns the empirical 193 for gear360" do
+      EasyFfmpeg::Vr360.profile_fov(EasyFfmpeg::Vr360::Profile::Gear360).should eq(193)
+      EasyFfmpeg::Vr360.profile_fov(EasyFfmpeg::Vr360::Profile::Generic).should eq(195)
     end
 
     it "parses input projection synonyms" do
@@ -1096,6 +1123,61 @@ describe EasyFfmpeg do
       v360 = plan.video_filters.find(&.starts_with?("v360="))
       v360.not_nil!.should contain("input=fisheye")
       v360.not_nil!.should_not contain("dfisheye")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "gear360 profile sets FOV to 193 by default" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+        vr360_profile: EasyFfmpeg::Vr360::Profile::Gear360,
+      )
+
+      v360 = plan.video_filters.find(&.starts_with?("v360=")).not_nil!
+      v360.should contain("ih_fov=193")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "explicit --vr360-fov overrides the profile default" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+        vr360_profile: EasyFfmpeg::Vr360::Profile::Gear360,
+        vr360_fov: 200,
+      )
+
+      v360 = plan.video_filters.find(&.starts_with?("v360=")).not_nil!
+      v360.should contain("ih_fov=200")
+      v360.should_not contain("ih_fov=193")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "passes yaw/pitch/roll calibration through to the filter" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+        vr360_yaw: 2.0, vr360_pitch: -1.5, vr360_roll: 0.5,
+      )
+
+      v360 = plan.video_filters.find(&.starts_with?("v360=")).not_nil!
+      v360.should contain("yaw=2")
+      v360.should contain("pitch=-1.5")
+      v360.should contain("roll=0.5")
     ensure
       EasyFfmpeg::GpuSupport.reset_cache!
     end

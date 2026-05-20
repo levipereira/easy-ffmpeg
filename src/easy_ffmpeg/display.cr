@@ -271,6 +271,10 @@ module EasyFfmpeg
       STDERR.puts " #{"Error".colorize(:red)}  #{message}"
     end
 
+    def self.show_warning(message : String)
+      puts " #{"Warning".colorize(:yellow)}  #{message}"
+    end
+
     # ── Helpers ──
 
     private def self.label(name : String, value)

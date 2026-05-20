@@ -192,7 +192,11 @@ Default frame rate is 24 fps for video, 10 fps for GIF. Auto-detects sequential 
 | `--gpu-quality MODE` | NVENC mode: `fast` \| `balanced` (default) \| `smaller` |
 | `--vr360 MODE` | 360 video pipeline: `full` \| `stitch` \| `encode` (requires `--gpu`) |
 | `--vr360-input TYPE` | Input projection: `dfisheye`/`dual` (default) \| `fisheye`/`single` |
-| `--vr360-fov DEG` | Fisheye FOV in degrees (default: 195) |
+| `--vr360-profile NAME` | Camera profile: `generic` (default) \| `gear360` (FOV 193) |
+| `--vr360-fov DEG` | Fisheye FOV in degrees (overrides profile default) |
+| `--vr360-yaw DEG` | Per-camera output yaw correction (default: 0) |
+| `--vr360-pitch DEG` | Per-camera output pitch correction (default: 0) |
+| `--vr360-roll DEG` | Per-camera output roll correction (default: 0) |
 | `--fps N` | Frame rate for image sequences (1-120) |
 | `-o PATH` | Custom output file path |
 | `--dry-run` | Print the ffmpeg command without executing |
