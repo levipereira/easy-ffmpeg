@@ -1,6 +1,7 @@
 require "./easy_ffmpeg/version"
 require "./easy_ffmpeg/codec_support"
 require "./easy_ffmpeg/gpu_support"
+require "./easy_ffmpeg/vr360"
 require "./easy_ffmpeg/preset"
 require "./easy_ffmpeg/media_info"
 require "./easy_ffmpeg/plan"

@@ -95,8 +95,8 @@ The wrapper exists so day-to-day use doesn't require typing
 - Generates the output filename next to the input as
   `<input_stem>_<tags>_<YYYYMMDDHHMMSS>.<format>`, where `<tags>` is the
   set of preset / mode flags passed (`web`, `mobile`, `streaming`,
-  `compress`, `gpu`, `no-subs`, `crop`, `force`) — so repeated runs with
-  different flags don't overwrite each other
+  `compress`, `gpu`, `no-subs`, `crop`, `force`, `vr360-<mode>`) — so
+  repeated runs with different flags don't overwrite each other
 - Passes everything else straight through to `easy-ffmpeg`
 
 The wrapper is **self-contained**: it doesn't read anything from this repo,
@@ -283,6 +283,13 @@ artifacts.
 
 The filter is placed before scale and aspect filters so downstream
 operations see progressive frames.
+
+### 360 / spherical video (`--vr360`)
+
+The `--vr360` flag adds a 360-degree video pipeline on top of the GPU
+path: dewarp dual-fisheye to equirectangular and encode, or re-encode an
+already-stitched equirect file, all in one ffmpeg run. It's NVENC-only,
+so it requires `--gpu`. Full writeup: **[vr360.md](vr360.md)**.
 
 ## Real-world benchmarks
 

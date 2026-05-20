@@ -1,5 +1,8 @@
 module EasyFfmpeg
-  SCALE_HEIGHTS  = {"2k" => 1440, "fullhd" => 1080, "hd" => 720, "retro" => 480, "icon" => 240}
+  SCALE_HEIGHTS = {
+    "4k" => 2160, "2k" => 1440, "fullhd" => 1080, "hd" => 720, "retro" => 480, "icon" => 240,
+    "2160p" => 2160, "1440p" => 1440, "1080p" => 1080, "720p" => 720, "480p" => 480,
+  }
   ASPECT_RATIOS  = {"wide" => {16, 9}, "4:3" => {4, 3}, "8:7" => {8, 7}, "square" => {1, 1}, "tiktok" => {9, 16}}
 
   enum StreamAction
@@ -39,13 +42,18 @@ module EasyFfmpeg
     getter overwrite_output : Bool
     getter use_gpu : Bool
     getter gpu_quality : GpuSupport::Quality
+    getter vr360_mode : Vr360::Mode?
+    getter vr360_input : Vr360::Input
+    getter vr360_fov : Int32
     getter? pure_gpu_pipeline : Bool
 
     def initialize(@input, @output_path, @target_format, @preset,
                    @start_time = nil, @end_time = nil, @duration = nil,
                    @scale = nil, @aspect = nil, @crop = false,
                    @overwrite_output = false, @use_gpu = false,
-                   @gpu_quality = GpuSupport::Quality::Balanced)
+                   @gpu_quality = GpuSupport::Quality::Balanced,
+                   @vr360_mode = nil, @vr360_input = Vr360::Input::Dfisheye,
+                   @vr360_fov = Vr360::DEFAULT_FOV)
       @stream_plans = [] of StreamPlan
       @global_args = [] of String
       @video_filters = [] of String
@@ -109,6 +117,7 @@ module EasyFfmpeg
     private def compute_pure_gpu_pipeline : Bool
       return false unless use_gpu
       return false unless aspect.nil?
+      return false if @video_filters.any?(&.starts_with?("v360="))
       transcodes = stream_plans.select { |p| p.stream.video? && p.action.transcode? }
       return false if transcodes.empty?
       transcodes.all? { |p| p.encoder.try(&.ends_with?("_nvenc")) || false }
@@ -137,7 +146,7 @@ module EasyFfmpeg
     end
 
     private def plan_video_streams(config : PresetConfig)
-      needs_filters = !scale.nil? || !aspect.nil?
+      needs_filters = !scale.nil? || !aspect.nil? || !vr360_mode.nil?
       input.video_streams.each do |stream|
         if config.force_transcode || needs_filters
           plan_video_transcode(stream, config)
@@ -161,6 +170,18 @@ module EasyFfmpeg
       # GPU swap: replace cpu encoder with NVENC equivalent when available.
       # Codecs without NVENC equivalents (e.g. libvpx-vp9) silently fall back to CPU.
       encoder = (use_gpu ? GpuSupport.gpu_encoder_for?(cpu_encoder) : nil) || cpu_encoder
+
+      # vr360 overrides the preset's encoder and args — bitrate is sized to
+      # the *input* width so --scale downsamples without dropping quality.
+      if mode = vr360_mode
+        encoder = "h264_nvenc"
+        width = stream.width || 3840
+        args = Vr360.encoder_args(Vr360.bitrate_mbps(width, mode))
+        append_vr360_filters(stream, mode)
+        append_vr360_scale(stream)
+        record_video_transcode(stream, encoder, args, mode.to_s.downcase)
+        return
+      end
 
       base_args = if config.force_transcode
                     config.video_args.dup
@@ -260,6 +281,33 @@ module EasyFfmpeg
         encoder: encoder,
         encoder_args: args,
         reason: reason,
+        output_codec_display: CodecSupport.codec_display_name(encoder),
+      )
+    end
+
+    # v360 is CPU-only; its presence is what disables the pure GPU pipeline.
+    private def append_vr360_filters(stream : StreamInfo, mode : Vr360::Mode)
+      unless mode.encode?
+        @video_filters << Vr360.dewarp_filter(vr360_input, vr360_fov)
+      end
+    end
+
+    private def append_vr360_scale(stream : StreamInfo)
+      return unless s = scale
+      target_h = SCALE_HEIGHTS[s]
+      if h = stream.height
+        @video_filters << "scale=-2:#{target_h}" if h > target_h
+      end
+    end
+
+    private def record_video_transcode(stream : StreamInfo, encoder : String,
+                                       args : Array(String), reason : String)
+      @stream_plans << StreamPlan.new(
+        stream: stream,
+        action: StreamAction::Transcode,
+        encoder: encoder,
+        encoder_args: args,
+        reason: "vr360 #{reason}",
         output_codec_display: CodecSupport.codec_display_name(encoder),
       )
     end

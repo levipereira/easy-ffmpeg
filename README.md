@@ -56,34 +56,33 @@ curl -fsSL https://raw.githubusercontent.com/akitaonrails/easy-ffmpeg/master/ins
 ### Linux / WSL2 with NVIDIA GPU — via Docker
 
 ```sh
-# 1. Clone and build the CUDA image (10-20 min the first time)
-git clone <this-repo>
+git clone https://github.com/akitaonrails/easy-ffmpeg.git
 cd easy-ffmpeg
-scripts/docker-build.sh
-
-# 2. Install the wrapper globally (copies the script — repo can be deleted after)
-mkdir -p ~/.local/bin
-cp scripts/easy-ffmpeg-docker.sh ~/.local/bin/easy-ffmpeg
-chmod +x ~/.local/bin/easy-ffmpeg
-
-# 3. (Optional) drop the source checkout — the wrapper only needs the Docker image
-cd .. && rm -rf easy-ffmpeg
-
-# 4. Use it from anywhere
-easy-ffmpeg -i video.mkv -f mp4 --compress --gpu
+./install.sh --gpu
 ```
 
-Prerequisites and details (driver version, nvidia-container-toolkit, build options, troubleshooting): **[docs/nvidia-acceleration.md](docs/nvidia-acceleration.md#quick-start)**.
+`install.sh --gpu` checks the prerequisites (Docker, NVIDIA driver, `nvidia-container-toolkit`), builds the CUDA image (10-20 min the first time), and installs the wrapper script as `easy-ffmpeg` so you can use it from anywhere. Run `./install.sh` with no flag to get an interactive prompt that asks CPU vs GPU.
+
+Prerequisites and details (driver version, build options, troubleshooting): **[docs/nvidia-acceleration.md](docs/nvidia-acceleration.md#quick-start)**.
 
 ### Build the CPU-only Crystal binary from source
 
 ```sh
-git clone <this-repo>
+git clone https://github.com/akitaonrails/easy-ffmpeg.git
 cd easy-ffmpeg
 crystal build src/easy_ffmpeg_cli.cr -o bin/easy-ffmpeg --release
 ```
 
 Copy `bin/easy-ffmpeg` somewhere in your `$PATH`.
+
+### Uninstall
+
+```sh
+./uninstall.sh           # auto-detects CPU binary vs GPU wrapper, asks before removing
+./uninstall.sh --yes     # skip confirmations
+```
+
+For the GPU install, the script also offers to delete the `easy-ffmpeg:cuda` Docker image (~4 GB) — declining keeps the image so you can reinstall later without rebuilding.
 
 ## Usage
 
@@ -118,12 +117,13 @@ Time formats: `90`, `1:31`, `1:31.500`, `1:02:30`, `1:02:30.5`.
 
 ```sh
 easy-ffmpeg movie.mkv mp4 --scale hd                  # 720p
+easy-ffmpeg movie.mkv mp4 --scale 1080p               # same as fullhd
 easy-ffmpeg movie.mkv mp4 --aspect wide               # pad to 16:9 (black bars)
 easy-ffmpeg movie.mkv mp4 --aspect square --crop      # crop to square
 easy-ffmpeg movie.mkv mp4 --scale fullhd --aspect wide
 ```
 
-Scale presets: `2k`, `fullhd`, `hd`, `retro`, `icon` (downscale only).
+Scale presets: `4k` / `2160p`, `2k` / `1440p`, `fullhd` / `1080p`, `hd` / `720p`, `retro` / `480p`, `icon` (downscale only).
 Aspect presets: `wide` (16:9), `4:3`, `8:7`, `square` (1:1), `tiktok` (9:16). `--crop` to crop instead of pad.
 
 ### GPU acceleration
@@ -146,6 +146,31 @@ The wrapper requires `-i <input>` and `-f <format>` (positional `<format>` also 
 
 Pipeline tiers, quality auto-tuning, HDR preservation, auto-deinterlace: **[docs/nvidia-acceleration.md](docs/nvidia-acceleration.md)**.
 
+### 360 / spherical video (`--vr360`)
+
+Convert dual-fisheye footage (Samsung Gear 360, Insta360, Ricoh Theta, etc.) to standard equirectangular MP4, or re-encode already-stitched 360 video. Requires `--gpu`.
+
+```sh
+# Dual-fisheye → equirectangular MP4 in one pass (most common)
+easy-ffmpeg raw360.mp4 mp4 --vr360 full --gpu
+
+# Stitch only, save high-bitrate intermediate for later editing
+easy-ffmpeg raw360.mp4 mp4 --vr360 stitch --gpu
+
+# Input is already equirectangular — just re-encode (e.g. Samsung "Stitch" files)
+easy-ffmpeg stitched360.mp4 mp4 --vr360 encode --gpu
+
+# Single-lens (single fisheye) source with custom FOV
+easy-ffmpeg single_lens.mp4 mp4 --vr360 full --gpu --vr360-input fisheye --vr360-fov 210
+
+# Downscale 4K equirect to 1080p equirect while re-encoding
+easy-ffmpeg stitched4k.mp4 mp4 --vr360 encode --gpu --scale 1080p
+```
+
+Output resolution defaults to the input resolution; pass `--scale` to downsample. The encoder is `h264_nvenc` at VBR with a bitrate target that scales with input width (50 Mbps for ≥4K, 25 Mbps for ≥2K, 12 Mbps otherwise). `stitch` mode doubles the bitrate since the file is intended as an intermediate.
+
+Full writeup: **[docs/vr360.md](docs/vr360.md)**.
+
 ### Image sequences
 
 ```sh
@@ -160,11 +185,14 @@ Default frame rate is 24 fps for video, 10 fps for GIF. Auto-detects sequential 
 
 | Flag | Description |
 |---|---|
-| `--scale NAME` | Scale resolution: `2k`, `fullhd`, `hd`, `retro`, `icon` |
+| `--scale NAME` | Scale resolution: `4k`/`2160p`, `2k`/`1440p`, `fullhd`/`1080p`, `hd`/`720p`, `retro`/`480p`, `icon` |
 | `--aspect RATIO` | Aspect ratio: `wide`, `4:3`, `8:7`, `square`, `tiktok` |
 | `--crop` | Crop to aspect ratio instead of padding |
 | `--gpu` | Use NVIDIA NVENC for H.264/H.265/AV1 transcodes |
 | `--gpu-quality MODE` | NVENC mode: `fast` \| `balanced` (default) \| `smaller` |
+| `--vr360 MODE` | 360 video pipeline: `full` \| `stitch` \| `encode` (requires `--gpu`) |
+| `--vr360-input TYPE` | Input projection: `dfisheye`/`dual` (default) \| `fisheye`/`single` |
+| `--vr360-fov DEG` | Fisheye FOV in degrees (default: 195) |
 | `--fps N` | Frame rate for image sequences (1-120) |
 | `-o PATH` | Custom output file path |
 | `--dry-run` | Print the ffmpeg command without executing |

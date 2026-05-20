@@ -917,4 +917,187 @@ describe EasyFfmpeg do
       args.join(" ").should contain("paletteuse")
     end
   end
+
+  describe "SCALE_HEIGHTS aliases" do
+    it "supports p-notation aliases (720p, 1080p, etc) and 4k" do
+      EasyFfmpeg::SCALE_HEIGHTS["720p"].should eq(720)
+      EasyFfmpeg::SCALE_HEIGHTS["1080p"].should eq(1080)
+      EasyFfmpeg::SCALE_HEIGHTS["1440p"].should eq(1440)
+      EasyFfmpeg::SCALE_HEIGHTS["2160p"].should eq(2160)
+      EasyFfmpeg::SCALE_HEIGHTS["4k"].should eq(2160)
+    end
+  end
+
+  describe EasyFfmpeg::Vr360 do
+    it "parses mode strings" do
+      EasyFfmpeg::Vr360.parse_mode?("full").should eq(EasyFfmpeg::Vr360::Mode::Full)
+      EasyFfmpeg::Vr360.parse_mode?("STITCH").should eq(EasyFfmpeg::Vr360::Mode::Stitch)
+      EasyFfmpeg::Vr360.parse_mode?("encode").should eq(EasyFfmpeg::Vr360::Mode::Encode)
+      EasyFfmpeg::Vr360.parse_mode?("bogus").should be_nil
+    end
+
+    it "scales bitrate by input width" do
+      EasyFfmpeg::Vr360.bitrate_mbps(3840, EasyFfmpeg::Vr360::Mode::Full).should eq(50)
+      EasyFfmpeg::Vr360.bitrate_mbps(2048, EasyFfmpeg::Vr360::Mode::Full).should eq(25)
+      EasyFfmpeg::Vr360.bitrate_mbps(1280, EasyFfmpeg::Vr360::Mode::Full).should eq(12)
+    end
+
+    it "doubles bitrate for stitch (intermediate) mode" do
+      EasyFfmpeg::Vr360.bitrate_mbps(3840, EasyFfmpeg::Vr360::Mode::Stitch).should eq(100)
+    end
+
+    it "builds the dewarp filter for dual-lens (dfisheye) with default FOV 195" do
+      EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Dfisheye)
+        .should eq("v360=input=dfisheye:output=equirect:ih_fov=195:iv_fov=195")
+    end
+
+    it "builds the dewarp filter for single-lens (fisheye)" do
+      EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Fisheye)
+        .should eq("v360=input=fisheye:output=equirect:ih_fov=195:iv_fov=195")
+    end
+
+    it "honors a custom FOV" do
+      EasyFfmpeg::Vr360.dewarp_filter(EasyFfmpeg::Vr360::Input::Dfisheye, 210)
+        .should eq("v360=input=dfisheye:output=equirect:ih_fov=210:iv_fov=210")
+    end
+
+    it "parses input projection synonyms" do
+      EasyFfmpeg::Vr360.parse_input?("dfisheye").should eq(EasyFfmpeg::Vr360::Input::Dfisheye)
+      EasyFfmpeg::Vr360.parse_input?("dual").should eq(EasyFfmpeg::Vr360::Input::Dfisheye)
+      EasyFfmpeg::Vr360.parse_input?("fisheye").should eq(EasyFfmpeg::Vr360::Input::Fisheye)
+      EasyFfmpeg::Vr360.parse_input?("single").should eq(EasyFfmpeg::Vr360::Input::Fisheye)
+      EasyFfmpeg::Vr360.parse_input?("nope").should be_nil
+    end
+
+    it "emits NVENC encoder args with -b:v / -maxrate / -bufsize" do
+      args = EasyFfmpeg::Vr360.encoder_args(50)
+      args.should contain("-rc")
+      args[args.index!("-rc") + 1].should eq("vbr")
+      args[args.index!("-b:v") + 1].should eq("50M")
+      args[args.index!("-maxrate") + 1].should eq("60M")
+      args[args.index!("-bufsize") + 1].should eq("100M")
+    end
+  end
+
+  describe "ConversionPlan with --vr360" do
+    it "Full mode: forces h264_nvenc, inserts v360, disables pure GPU pipeline" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true, vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+      )
+
+      plan.video_plans.first.encoder.should eq("h264_nvenc")
+      plan.video_filters.any?(&.starts_with?("v360=")).should be_true
+      plan.pure_gpu_pipeline?.should be_false
+      args = plan.video_plans.first.encoder_args
+      args.should contain("-b:v")
+      args[args.index!("-b:v") + 1].should eq("50M")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "Encode mode: keeps pure GPU pipeline (no v360 filter), still high bitrate" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true, vr360_mode: EasyFfmpeg::Vr360::Mode::Encode,
+      )
+
+      plan.video_plans.first.encoder.should eq("h264_nvenc")
+      plan.video_filters.any?(&.starts_with?("v360=")).should be_false
+      plan.pure_gpu_pipeline?.should be_true
+      args = plan.video_plans.first.encoder_args
+      args[args.index!("-b:v") + 1].should eq("50M")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "Stitch mode: doubles bitrate vs Full" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true, vr360_mode: EasyFfmpeg::Vr360::Mode::Stitch,
+      )
+      args = plan.video_plans.first.encoder_args
+      args[args.index!("-b:v") + 1].should eq("100M")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "honors custom FOV in the v360 filter" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+        vr360_fov: 210,
+      )
+
+      v360 = plan.video_filters.find(&.starts_with?("v360="))
+      v360.not_nil!.should contain("ih_fov=210")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "applies --scale to downsample the output (e.g. 4K source → 1080p)" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Encode,
+        scale: "1080p",
+      )
+
+      # In encode mode (no v360 filter), pure GPU pipeline rewrites
+      # scale → scale_cuda. In full/stitch modes it stays as scale=.
+      plan.video_filters.any? { |f| f.includes?("=-2:1080") }.should be_true
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "does not upscale when --scale target is larger than input" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 1920, video_height: 960)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Encode,
+        scale: "4k",
+      )
+
+      plan.video_filters.none? { |f| f.starts_with?("scale=") }.should be_true
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+
+    it "uses input=fisheye when --vr360-input fisheye is selected" do
+      EasyFfmpeg::GpuSupport.stub_encoders!(["h264_nvenc", "hevc_nvenc"])
+      info = build_media_info(video_codec: "h264", video_width: 3840, video_height: 1920)
+
+      plan = EasyFfmpeg::ConversionPlan.new(
+        info, "out.mp4", "mp4", EasyFfmpeg::Preset::Default,
+        use_gpu: true,
+        vr360_mode: EasyFfmpeg::Vr360::Mode::Full,
+        vr360_input: EasyFfmpeg::Vr360::Input::Fisheye,
+      )
+
+      v360 = plan.video_filters.find(&.starts_with?("v360="))
+      v360.not_nil!.should contain("input=fisheye")
+      v360.not_nil!.should_not contain("dfisheye")
+    ensure
+      EasyFfmpeg::GpuSupport.reset_cache!
+    end
+  end
 end

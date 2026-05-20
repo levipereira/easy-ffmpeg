@@ -7,26 +7,58 @@
 # filename, and passes everything else through to easy-ffmpeg.
 #
 # Usage:
-#   easy-ffmpeg-docker.sh -i <input> -f <format> [easy-ffmpeg options...]
-#
-# Examples:
-#   ./scripts/easy-ffmpeg-docker.sh -i movie.mkv -f mp4 --compress --gpu
-#   ./scripts/easy-ffmpeg-docker.sh -i ~/videos/foo.mp4 -f mp4 --web --gpu
-#   ./scripts/easy-ffmpeg-docker.sh -i ../clip.ts -f mkv --streaming --gpu --scale fullhd
-#
-# Backwards-compatible: positional format (without -f) still works:
-#   ./scripts/easy-ffmpeg-docker.sh -i movie.mkv mp4 --compress --gpu
+#   easy-ffmpeg -i <input> [-f <format>] [easy-ffmpeg options...]
 #
 # The output filename is generated next to the input as:
 #   <input_stem>_<tags>_<YYYYMMDDHHMMSS>.<format>
-# where <tags> is the set of preset / mode flags passed (e.g. compress_gpu).
+# where <tags> is the set of preset / mode flags passed (e.g. compress_gpu,
+# vr360-full_gpu).
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
 IMAGE="${IMAGE:-easy-ffmpeg:cuda}"
 
-usage() {
-  sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+c_cyan()  { printf '\033[1;36m%s\033[0m' "$*"; }
+c_dim()   { printf '\033[2m%s\033[0m' "$*"; }
+
+show_wrapper_help() {
+  cat <<EOF
+$(c_cyan "easy-ffmpeg")  Docker wrapper for the NVIDIA-accelerated CUDA image
+$(c_dim "  image: $IMAGE")
+
+$(c_cyan "Usage")
+  easy-ffmpeg -i <input> [-f <format>] [easy-ffmpeg options...]
+
+$(c_cyan "Wrapper flags")
+  -i, --input PATH      Input video file (required)
+  -f, --format FORMAT   Output format: mp4, mkv, mov, webm, avi, ts, gif
+                        (also accepted positionally for back-compat)
+  -h, --help            Show this help and the full easy-ffmpeg help below
+
+$(c_cyan "Output")
+  Auto-generated next to the input as:
+    <input_stem>_<tags>_<YYYYMMDDHHMMSS>.<format>
+
+$(c_cyan "Examples")
+  easy-ffmpeg -i movie.mkv -f mp4 --compress --gpu
+  easy-ffmpeg -i ~/videos/foo.mp4 -f mp4 --web --gpu
+  easy-ffmpeg -i clip.ts -f mkv --streaming --gpu --scale fullhd
+  easy-ffmpeg -i raw360.mp4 -f mp4 --vr360 full --gpu
+  easy-ffmpeg -i stitched4k.mp4 -f mp4 --vr360 encode --gpu --scale 1080p
+
+$(c_cyan "Environment")
+  IMAGE   Override the Docker image tag (default: easy-ffmpeg:cuda)
+
+All other options are passed through to easy-ffmpeg inside the container.
+
+EOF
+  # Forward the real CLI help so users see every inner flag.
+  if command -v docker >/dev/null 2>&1 && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    printf '\033[1;36m─── easy-ffmpeg (inside the image) ───\033[0m\n\n'
+    docker run --rm "$IMAGE" --help 2>/dev/null || true
+  else
+    printf '\033[2m(Docker image %s not available — run scripts/docker-build.sh to install it.)\033[0m\n' "$IMAGE"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -58,7 +90,7 @@ while (( $# > 0 )); do
       shift
       ;;
     -h|--help)
-      usage
+      show_wrapper_help
       exit 0
       ;;
     *)
@@ -113,12 +145,21 @@ esac
 # the user passed so different runs don't clobber each other.
 # ---------------------------------------------------------------------------
 declare -a TAGS=()
+prev=""
 for arg in "${PASS_THROUGH[@]}"; do
   case "$arg" in
     --web|--mobile|--streaming|--compress|--gpu|--no-subs|--crop|--force)
       TAGS+=("${arg#--}")
       ;;
+    --vr360)
+      ;;  # value captured on next iteration via $prev
+    *)
+      if [ "$prev" = "--vr360" ]; then
+        TAGS+=("vr360-${arg}")
+      fi
+      ;;
   esac
+  prev="$arg"
 done
 
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"

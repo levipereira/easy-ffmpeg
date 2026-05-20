@@ -24,6 +24,9 @@ module EasyFfmpeg
       crop = false
       use_gpu = false
       gpu_quality = GpuSupport::Quality::Balanced
+      vr360_mode : Vr360::Mode? = nil
+      vr360_input = Vr360::Input::Dfisheye
+      vr360_fov = Vr360::DEFAULT_FOV
       input_path : String? = nil
       target_ext : String? = nil
 
@@ -65,7 +68,7 @@ module EasyFfmpeg
           end
           fps_override = val
         end
-        parser.on("--scale NAME", "Scale resolution (2k, fullhd, hd, retro, icon)") do |s|
+        parser.on("--scale NAME", "Scale resolution (4k, 2k, fullhd/1080p, hd/720p, retro/480p, icon)") do |s|
           unless SCALE_HEIGHTS.has_key?(s)
             Display.show_error("unknown scale '#{s}'. Valid options: #{SCALE_HEIGHTS.keys.join(", ")}")
             exit 1
@@ -90,6 +93,30 @@ module EasyFfmpeg
             Display.show_error("invalid --gpu-quality value: '#{m}'. Use: fast | balanced | smaller")
             exit 1
           end
+        end
+        parser.on("--vr360 MODE", "360 video pipeline: full | stitch | encode (requires --gpu)") do |m|
+          mode = Vr360.parse_mode?(m)
+          unless mode
+            Display.show_error("invalid --vr360 value: '#{m}'. Use: full | stitch | encode")
+            exit 1
+          end
+          vr360_mode = mode
+        end
+        parser.on("--vr360-input TYPE", "Input projection: dfisheye (dual-lens, default) | fisheye (single-lens)") do |v|
+          input = Vr360.parse_input?(v)
+          unless input
+            Display.show_error("invalid --vr360-input value: '#{v}'. Use: dfisheye | fisheye")
+            exit 1
+          end
+          vr360_input = input
+        end
+        parser.on("--vr360-fov DEG", "Fisheye FOV in degrees for --vr360 (default: 195)") do |v|
+          val = v.to_i?
+          unless val && val > 0 && val <= 360
+            Display.show_error("--vr360-fov must be an integer between 1 and 360")
+            exit 1
+          end
+          vr360_fov = val
         end
         parser.on("-o PATH", "--output=PATH", "Custom output file path") { |p| custom_output = p }
         parser.on("--dry-run", "Print ffmpeg command without executing") { dry_run = true }
@@ -125,6 +152,12 @@ module EasyFfmpeg
       # Validate --gpu-quality requires --gpu
       if gpu_quality != GpuSupport::Quality::Balanced && !use_gpu
         Display.show_error("--gpu-quality requires --gpu")
+        exit 1
+      end
+
+      # Validate --vr360 requires --gpu
+      if vr360_mode && !use_gpu
+        Display.show_error("--vr360 requires --gpu")
         exit 1
       end
 
@@ -255,7 +288,8 @@ module EasyFfmpeg
       plan = ConversionPlan.new(info, dest, target_format, preset,
         start_time: start_time, end_time: end_time, duration: duration,
         scale: scale, aspect: aspect, crop: crop, overwrite_output: force,
-        use_gpu: use_gpu, gpu_quality: gpu_quality)
+        use_gpu: use_gpu, gpu_quality: gpu_quality,
+        vr360_mode: vr360_mode, vr360_input: vr360_input, vr360_fov: vr360_fov)
 
       # Apply --no-subs: override subtitle plans to Drop
       if no_subs
@@ -420,6 +454,12 @@ module EasyFfmpeg
       puts ""
       puts "  # Hardware-accelerated encode using NVIDIA NVENC"
       puts "  easy-ffmpeg movie.mkv mp4 --compress --gpu"
+      puts ""
+      puts "  # 360 video: dewarp dual-fisheye → equirectangular + encode"
+      puts "  easy-ffmpeg gear360_raw.mp4 mp4 --vr360 full --gpu"
+      puts ""
+      puts "  # 360 video: re-encode already-stitched equirect file at 1080p"
+      puts "  easy-ffmpeg stitched4k.mp4 mp4 --vr360 encode --gpu --scale 1080p"
       puts ""
       puts "  # Preview the ffmpeg command without running it"
       puts "  easy-ffmpeg movie.mkv mp4 --web --dry-run"
